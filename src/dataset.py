@@ -3,11 +3,14 @@ import pandas as pd
 import matplotlib.pyplot as plt
 import re
 from transformers import BertTokenizer
+import torch
 
 # Load the IMDB movie review dataset
 dataset=load_dataset('csv', data_files='IMDB Dataset.csv')
 df = pd.DataFrame(dataset['train'])
 tokenizer = BertTokenizer.from_pretrained('bert-base-uncased')
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+print(f"Using device: {device}")
 
 ## Show the first few rows of the dataframe
 #print(df.head())
@@ -88,4 +91,118 @@ train_dataloader = DataLoader(train_dataset, sampler=RandomSampler(train_dataset
 val_dataloader = DataLoader(val_dataset, sampler=SequentialSampler(val_dataset), batch_size=8)
 
 print(f"Training and Validation DataLoaders created successfully!")
+
+from transformers import BertForSequenceClassification
+
+# Load pre-trained BERT with a classification head
+model = BertForSequenceClassification.from_pretrained(
+    'bert-base-uncased',  # Pre-trained BERT model
+    num_labels=2  # Number of classes (positive and negative sentiment)
+)
+
+# Print the model architecture
+print(model)
+
+
+
+import torch
+from torch.optim import AdamW
+from torch.utils.data import DataLoader
+
+# Set device (use GPU if available)
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+model.to(device)
+
+# Define the optimizer (AdamW is recommended for BERT)
+optimizer = AdamW(model.parameters(), lr=2e-5)  # Learning rate is usually small for BERT fine-tuning
+
+# Loss function (CrossEntropyLoss is used for classification tasks)
+loss_fn = torch.nn.CrossEntropyLoss()
+
+# Create the DataLoaders (use the ones created in Step 2)
+train_dataloader = DataLoader(train_dataset, batch_size=8, shuffle=True)
+val_dataloader = DataLoader(val_dataset, batch_size=8, shuffle=False)
+
+print("DataLoaders and optimizer initialized successfully!")
+
+
+# Training function
+def train(model, train_dataloader, val_dataloader, optimizer, loss_fn, epochs=2):
+    for epoch in range(epochs):
+        print(f"Epoch {epoch+1}/{epochs}")
+
+        # Training phase
+        model.train()  # Set model to training mode
+        total_loss = 0
+
+        for batch in train_dataloader:
+            # Unpack the inputs from the dataloader
+            input_ids, attention_mask, labels = [x.to(device) for x in batch]
+
+            # Clear previously calculated gradients
+            optimizer.zero_grad()
+
+            # Forward pass: Get the model outputs
+            outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+
+            # Compute the loss and accumulate it
+            loss = outputs.loss
+            total_loss += loss.item()
+
+            # Backpropagation
+            loss.backward()
+
+            # Gradient clipping (recommended for BERT fine-tuning)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
+
+            # Update weights
+            optimizer.step()
+
+        avg_train_loss = total_loss / len(train_dataloader)
+        print(f"Training Loss: {avg_train_loss:.3f}")
+
+        # Validation phase
+        model.eval()  # Set model to evaluation mode
+        val_accuracy = 0
+        val_loss = 0
+        nb_val_steps = 0
+
+        # Disable gradient calculation for validation (saves memory and computation)
+        with torch.no_grad():
+            for batch in val_dataloader:
+                input_ids, attention_mask, labels = [x.to(device) for x in batch]
+
+                # Forward pass
+                outputs = model(input_ids, attention_mask=attention_mask, labels=labels)
+                loss = outputs.loss
+                val_loss += loss.item()
+
+                # Get predictions
+                logits = outputs.logits
+                preds = torch.argmax(logits, dim=1).flatten()
+
+                # Calculate accuracy
+                val_accuracy += (preds == labels).cpu().numpy().mean()
+                nb_val_steps += 1
+
+        avg_val_accuracy = val_accuracy / nb_val_steps
+        avg_val_loss = val_loss / nb_val_steps
+
+        print(f"Validation Loss: {avg_val_loss:.3f}, Validation Accuracy: {avg_val_accuracy:.3f}")
+
+
+
+# Set the number of training epochs
+epochs = 3
+
+# Train the model
+train(model, train_dataloader, val_dataloader, optimizer, loss_fn, epochs)
+
+
+# Save the trained model and tokenizer
+model_save_path = "bert_sentiment_model"
+model.save_pretrained(model_save_path)
+tokenizer.save_pretrained(model_save_path)
+
+print(f"Model and tokenizer saved to {model_save_path}.")
 
